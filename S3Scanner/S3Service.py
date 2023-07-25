@@ -15,6 +15,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from urllib3 import disable_warnings
 import os
+import re
+import requests
+import xml.etree.ElementTree as ET
 
 
 ALL_USERS_URI = 'uri=http://acs.amazonaws.com/groups/global/AllUsers'
@@ -36,6 +39,9 @@ class S3Service:
         self.endpoint_url = endpoint_url
         self.endpoint_address_style = 'path' if endpoint_address_style == 'path' else 'virtual'
         use_ssl = True if self.endpoint_url.startswith('http://') else False
+
+        self.use_ssl = use_ssl
+        self.verify_ssl = verify_ssl
 
         if not verify_ssl:
             disable_warnings()
@@ -70,6 +76,11 @@ class S3Service:
 
         del session  # No longer needed
 
+    def initialize(self):
+        self.s3_client = client('s3', config=Config(s3={'addressing_style': self.endpoint_address_style}, connect_timeout=3,
+                                         retries={'max_attempts': 2}),
+                                          endpoint_url=self.endpoint_url, use_ssl=self.use_ssl, verify=self.verify_ssl)
+
     def check_bucket_exists(self, bucket):
         """
         Checks if a bucket exists. Sets `exists` property of `bucket`
@@ -90,6 +101,39 @@ class S3Service:
                 bucket_exists = False
 
         bucket.exists = BucketExists.YES if bucket_exists else BucketExists.NO
+
+    def _get_custom_bucket_location(self, bucket, default_region="eu-central-1"):
+        """ Read region from the API response
+        """
+        r = requests.get(f"https://s3.{default_region}.amazonaws.com/{bucket.name}/")
+        if r.status_code == 200:
+            return "eu-central-1"
+        elif r.status_code == 403:
+            return None
+        else:
+            root = ET.fromstring(r.text)
+            ep = root.find('Endpoint').text
+            match = re.search(r"s3-(\w+-\w+-\d+)\.amazonaws\.com", ep)
+            return match.group(1)
+
+    def get_bucket_location(self, bucket):
+        bucket.location = self._get_custom_bucket_location(bucket)
+        print(f"The bucket region: {bucket.location}")
+
+    def test_url_for_redirect(self, bucket):
+        try:
+            r = self.s3_client.get_bucket_acl(Bucket=bucket.name)
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "PermanentRedirect":
+                return False
+        return True
+
+    def check_listing(self, bucket):
+        try:
+            bucket.foundListing = self.s3_client.list_objects_v2(Bucket=bucket.name, MaxKeys=0)["ResponseMetadata"]["HTTPStatusCode"] == 200
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "AccessDenied":
+                pass # listing failed
 
     def check_perm_read_acl(self, bucket):
         """

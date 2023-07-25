@@ -66,6 +66,7 @@ class S3Bucket:
     bucketSize = 0
     objects_enumerated = False
     foundACL = None
+    foundListing = False
 
     def __init__(self, name):
         """

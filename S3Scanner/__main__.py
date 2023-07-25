@@ -77,6 +77,21 @@ def scan_single_bucket(s3service, anons3service, do_dangerous, bucket_name):
     checkAllUsersPerms = True
     checkAuthUsersPerms = True
 
+    # This is a temp hack to fix the "redirect" when a region needs to be provided
+    # in order to access the S3
+    if not s3service.test_url_for_redirect(b):
+        s3service.get_bucket_location(b)
+        if b.location is None:
+            return
+        s3service.endpoint_url = f"https://s3.{b.location}.amazonaws.com/"
+        anons3service.endpoint_url = f"https://s3.{b.location}.amazonaws.com/"
+        # re-initialize s3service with new endpoints
+        s3service.initialize()
+        anons3service.initialize()
+
+    # 0. Check for listing
+    anons3service.check_listing(b)
+
     # 1. Check for ReadACP
     anons3service.check_perm_read_acl(b)  # Check for AllUsers
     if s3service.aws_creds_configured and s3service.endpoint_url == AWS_ENDPOINT:
@@ -108,7 +123,7 @@ def scan_single_bucket(s3service, anons3service, do_dangerous, bucket_name):
         if s3service.aws_creds_configured and checkAuthUsersPerms:
             s3service.check_perm_write_acl(b)
 
-    print(f"{b.name} | bucket_exists | {b.get_human_readable_permissions()}")
+    print(f"{b.name} | bucket_exists | {b.get_human_readable_permissions()} | Listing:{b.foundListing}")
 
 
 def main():
